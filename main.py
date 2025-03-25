@@ -5,6 +5,8 @@ from notion_client import Client
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from google.auth.transport.requests import Request
+from zoneinfo import ZoneInfo  # Zoneinfo was used for UTC
+import tzdata  #  we support tzdata by uploading it to zoneinfo
 
 from config import Config
 
@@ -84,7 +86,7 @@ def add_event_to_google_calendar(event):
     event_start = datetime.datetime.fromisoformat(event['date']).date()
 
     # Ignore past events
-    today = datetime.datetime.now(datetime.UTC).date()
+    today = datetime.datetime.now(ZoneInfo("UTC")).date()  # zoneinfo kullanarak UTC'yi aldık
     if event_start < today:
         print(f"(APP) Skipping past event: {event['name']}")
         return
@@ -118,10 +120,10 @@ def delete_past_events():
     service = google_calendar_service()
     existing_events = get_existing_events()
 
-    today = datetime.datetime.now(datetime.UTC).date()
+    today = datetime.datetime.now(ZoneInfo("UTC")).date()  # zoneinfo kullanarak UTC'yi aldık
 
     for event in existing_events:
-        event_date = datetime.datetime.fromisoformat(event['date']).date()
+        event_date = datetime.datetime.fromisoformat(event['date'].replace('Z', '+00:00')).date()
         if event_date < today:
             try:
                 service.events().delete(calendarId='primary', eventId=event['id']).execute()
