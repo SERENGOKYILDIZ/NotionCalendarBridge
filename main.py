@@ -21,7 +21,6 @@ SCOPES = config.get_key("SCOPES")  # Allows read and write access to Google Cale
 notion = Client(auth=NOTION_API_KEY)
 
 
-# Function to authenticate and connect to Google Calendar API
 def google_calendar_service():
     creds = None
     if os.path.exists('token.pickle'):
@@ -43,24 +42,22 @@ def google_calendar_service():
     return service
 
 
-# Function to fetch existing events from Google Calendar
 def get_existing_events():
     service = google_calendar_service()
-
-    events_result = service.events().list(calendarId='primary', maxResults=10, singleEvents=True,
+    events_result = service.events().list(calendarId='primary', maxResults=50, singleEvents=True,
                                           orderBy='startTime').execute()
     events = events_result.get('items', [])
 
     existing_events = []
     for event in events:
-        name = event['summary']
+        name = event.get('summary', 'No Name')
         date = event['start'].get('dateTime', event['start'].get('date'))
-        existing_events.append({'name': name, 'date': date})
+        event_id = event.get('id')
+        existing_events.append({'name': name, 'date': date, 'id': event_id})
 
     return existing_events
 
 
-# Function to fetch event data from Notion
 def get_notion_data():
     results = notion.databases.query(database_id=DATABASE_ID)
     events = []
@@ -68,33 +65,37 @@ def get_notion_data():
     for page in results["results"]:
         properties = page["properties"]
 
-        if "Name" in properties:
+        name = "Unnamed Event"
+        if "Name" in properties and properties["Name"]["title"]:
             name = properties["Name"]["title"][0]["text"]["content"]
-        else:
-            name = "No Name"
 
+        date = None
         if "Date" in properties and properties["Date"]["date"] is not None:
             date = properties["Date"]["date"]["start"]
-        else:
-            date = "No Date"
 
-        events.append({"name": name, "date": date})
+        if date:
+            events.append({"name": name, "date": date})
 
     return events
 
 
-# Function to add an event to Google Calendar if it doesn't already exist
+# Modify the function to check and add only future events
 def add_event_to_google_calendar(event):
+    event_start = datetime.datetime.fromisoformat(event['date']).date()
+
+    # Ignore past events
+    today = datetime.datetime.now(datetime.UTC).date()
+    if event_start < today:
+        print(f"(APP) Skipping past event: {event['name']}")
+        return
+
     existing_events = get_existing_events()
 
-    # Check if an event with the same name already exists
     if any(existing_event['name'] == event['name'] for existing_event in existing_events):
         print(f"(APP) Event '{event['name']}' already exists. Skipping...")
         return
 
     service = google_calendar_service()
-
-    event_start = datetime.datetime.fromisoformat(event['date'])
     event_end = event_start + datetime.timedelta(hours=1)
 
     event_body = {
@@ -113,7 +114,23 @@ def add_event_to_google_calendar(event):
     print(f"(APP) Event '{event['name']}' has been added to Google Calendar.")
 
 
-# Fetch events from Notion and add them to Google Calendar
+def delete_past_events():
+    service = google_calendar_service()
+    existing_events = get_existing_events()
+
+    today = datetime.datetime.now(datetime.UTC).date()
+
+    for event in existing_events:
+        event_date = datetime.datetime.fromisoformat(event['date']).date()
+        if event_date < today:
+            try:
+                service.events().delete(calendarId='primary', eventId=event['id']).execute()
+                print(f"(APP) Deleted past event: {event['name']}")
+            except Exception as e:
+                print(f"(APP) Error deleting event {event['name']}: {e}")
+
+
+delete_past_events()
 events = get_notion_data()
 for event in events:
     add_event_to_google_calendar(event)
