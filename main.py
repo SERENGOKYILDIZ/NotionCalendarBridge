@@ -5,8 +5,8 @@ from notion_client import Client
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
 from google.auth.transport.requests import Request
-from zoneinfo import ZoneInfo  # Zoneinfo was used for UTC
-import tzdata  #  we support tzdata by uploading it to zoneinfo
+from zoneinfo import ZoneInfo
+import tzdata  # Required for zoneinfo to work
 
 from config import Config
 
@@ -23,6 +23,7 @@ SCOPES = config.get_key("SCOPES")  # Allows read and write access to Google Cale
 notion = Client(auth=NOTION_API_KEY)
 
 
+# Google Calendar service initialization
 def google_calendar_service():
     creds = None
     if os.path.exists('token.pickle'):
@@ -44,6 +45,7 @@ def google_calendar_service():
     return service
 
 
+# Get existing events from Google Calendar
 def get_existing_events():
     service = google_calendar_service()
     events_result = service.events().list(calendarId='primary', maxResults=50, singleEvents=True,
@@ -60,6 +62,7 @@ def get_existing_events():
     return existing_events
 
 
+# Get events data from Notion
 def get_notion_data():
     results = notion.databases.query(database_id=DATABASE_ID)
     events = []
@@ -81,18 +84,19 @@ def get_notion_data():
     return events
 
 
-# Modify the function to check and add only future events
+# Add events to Google Calendar, skipping past events
 def add_event_to_google_calendar(event):
     event_start = datetime.datetime.fromisoformat(event['date']).date()
 
     # Ignore past events
-    today = datetime.datetime.now(ZoneInfo("UTC")).date()  # zoneinfo kullanarak UTC'yi aldık
+    today = datetime.datetime.now(ZoneInfo("UTC")).date()
     if event_start < today:
         print(f"(APP) Skipping past event: {event['name']}")
         return
 
     existing_events = get_existing_events()
 
+    # Check if event already exists in Google Calendar
     if any(existing_event['name'] == event['name'] for existing_event in existing_events):
         print(f"(APP) Event '{event['name']}' already exists. Skipping...")
         return
@@ -100,6 +104,7 @@ def add_event_to_google_calendar(event):
     service = google_calendar_service()
     event_end = event_start + datetime.timedelta(hours=1)
 
+    # Create event body to add to Google Calendar
     event_body = {
         'summary': event['name'],
         'start': {
@@ -112,16 +117,19 @@ def add_event_to_google_calendar(event):
         },
     }
 
+    # Insert event into Google Calendar
     service.events().insert(calendarId='primary', body=event_body).execute()
     print(f"(APP) Event '{event['name']}' has been added to Google Calendar.")
 
 
+# Delete past events from Google Calendar
 def delete_past_events():
     service = google_calendar_service()
     existing_events = get_existing_events()
 
-    today = datetime.datetime.now(ZoneInfo("UTC")).date()  # zoneinfo kullanarak UTC'yi aldık
+    today = datetime.datetime.now(ZoneInfo("UTC")).date()
 
+    # Delete past events from Google Calendar
     for event in existing_events:
         event_date = datetime.datetime.fromisoformat(event['date'].replace('Z', '+00:00')).date()
         if event_date < today:
@@ -132,7 +140,37 @@ def delete_past_events():
                 print(f"(APP) Error deleting event {event['name']}: {e}")
 
 
+# Delete events that are no longer present in Notion
+def delete_events_not_in_notion():
+    service = google_calendar_service()
+    existing_google_events = get_existing_events()
+
+    notion_events = get_notion_data()
+
+    # Delete events from Google Calendar that are not in Notion
+    for event in existing_google_events:
+        event_in_notion = False
+        for notion_event in notion_events:
+            if event['name'] == notion_event['name']:
+                event_in_notion = True
+                break
+
+        # If event is not found in Notion, delete it from Google Calendar
+        if not event_in_notion:
+            try:
+                service.events().delete(calendarId='primary', eventId=event['id']).execute()
+                print(f"(APP) Deleted event from Google Calendar: {event['name']}")
+            except Exception as e:
+                print(f"(APP) Error deleting event {event['name']}: {e}")
+
+
+# Main execution to delete past events and add new ones
 delete_past_events()
+
+# Add events from Notion to Google Calendar
 events = get_notion_data()
 for event in events:
     add_event_to_google_calendar(event)
+
+# Delete events from Google Calendar that are no longer present in Notion
+delete_events_not_in_notion()
